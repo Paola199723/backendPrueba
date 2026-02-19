@@ -1,18 +1,22 @@
 import { HttpService } from '@nestjs/axios';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
 import * as crypto from 'crypto';
-import { PaymentsEntity } from '../../domain/entity/payments.entity';
+import { Repository } from 'typeorm';
+import { PaymentsOrmEntity } from '../../domain/entity/payment.orm-entity';
+import { Venta } from '../../domain/entity/payments.entity';
 import { PaymentsPort } from '../../domain/port/payments.port';
-
 @Injectable()
 export class PaymentsAdapter implements PaymentsPort {
   constructor(
     private readonly httpService: HttpService,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    @InjectRepository(PaymentsOrmEntity)
+    private readonly paymentsRepository: Repository<PaymentsOrmEntity>,
   ) {}
 
-  async createPayment(Payment: any): Promise<PaymentsEntity> {
+  async createPayment(Payment: any): Promise<Venta> {
     const url = this.configService.get<string>('SANDBOX_PAYMENTS_URL');
     const KEY_PUBLIC = this.configService.get<string>('SANDBOX_PUBLIC_KEY');
     const referencia = this.generarReferencia();
@@ -26,6 +30,7 @@ export class PaymentsAdapter implements PaymentsPort {
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     Payment.signature = hashHex;
+    Payment.token_card = Payment.token_card;
 
     console.error(' Enviando pago:', Payment);
 
@@ -45,7 +50,18 @@ export class PaymentsAdapter implements PaymentsPort {
       console.error(' Pago creado. ID transacción:', transactionId);
 
       const finalStatus = await this.waitForApproval(transactionId);
-      return finalStatus;
+      const entity = this.paymentsRepository.create({
+        id_transaction: transactionId,
+        total: Payment.amount_in_cents,
+        impuesto: Payment.amount_in_cents * this.configService.get<number>('IMPUESTO') / 100,
+        });
+      await this.paymentsRepository.save(entity);
+      const venta = new Venta();
+      venta.id_transaction = transactionId;
+      venta.total = Payment.amount_in_cents;
+      venta.impuesto = Payment.amount_in_cents* this.configService.get<number>('IMPUESTO')/100; 
+      console.error(' Venta guardada:', venta);
+      return venta;
     } catch (error) {
       console.error(' Error en createPayment:', error.response?.data || error.message);
       throw new Error('Error al consumir el endpoint de Wompi');
@@ -93,6 +109,7 @@ export class PaymentsAdapter implements PaymentsPort {
       const status = transaction.status;
       if (status === 'APPROVED' || status === 'DECLINED') {
         console.log(`Transacción finalizada con estado: ${status}`);
+
         return transaction;
       }
 

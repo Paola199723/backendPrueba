@@ -15,4 +15,12 @@ class PaymentMethod {
     token : string;
     installments : Int32;
 }
-  
+export class Venta {
+    id: number;
+    id_transaction: string;
+    total: number;
+    impuesto: number;
+    created_at: Date;
+    updated_at: Date;
+}
+
